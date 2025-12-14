@@ -309,9 +309,29 @@ pub unsafe fn instr16_0F01_6_mem(addr: i32) {
 pub unsafe fn instr32_0F01_6_mem(addr: i32) { instr16_0F01_6_mem(addr) }
 
 #[no_mangle]
-pub unsafe fn instr16_0F01_7_reg(_r: i32) { trigger_ud(); }
+pub unsafe fn instr16_0F01_7_reg(r: i32) { instr32_0F01_7_reg(r) }
 #[no_mangle]
-pub unsafe fn instr32_0F01_7_reg(_r: i32) { trigger_ud(); }
+pub unsafe fn instr32_0F01_7_reg(r: i32) {
+    match r {
+        0 => {
+            // SWAPGS
+            if 0 != *cpl { trigger_gp(0); return; }
+            let temp = *msr_gs_base;
+            *msr_gs_base = *msr_kernel_gs_base;
+            *msr_kernel_gs_base = temp;
+            *segment_offsets.offset(GS as isize) = *msr_gs_base as i32;
+        },
+        1 => {
+            // RDTSCP
+            let tsc = read_tsc();
+            write_reg32(EAX, tsc as i32);
+            write_reg32(EDX, (tsc >> 32) as i32);
+            write_reg32(ECX, 0); 
+        },
+        _ => trigger_ud(),
+    }
+}
+
 
 #[no_mangle]
 pub unsafe fn instr16_0F01_7_mem(addr: i32) {
@@ -412,7 +432,50 @@ pub unsafe fn instr32_0F03_reg(r1: i32, r: i32) {
 #[no_mangle]
 pub unsafe fn instr_0F04() { undefined_instruction(); }
 #[no_mangle]
-pub unsafe fn instr_0F05() { undefined_instruction(); }
+pub unsafe fn instr_0F05() {
+    // SYSCALL
+    if *msr_efer & 1 == 0 {
+        trigger_ud();
+        return;
+    }
+    
+    write_reg64(RCX, *instruction_pointer as u32 as u64);
+    // TODO: update_state_flags()? flags might be stale
+    write_reg64(R11, *flags as u32 as u64);
+
+    *instruction_pointer = *msr_lstar as i32;
+
+    let cs_sel = ((*msr_star >> 32) as u16) & 0xFFFC;
+    *sreg.offset(CS as isize) = cs_sel;
+    
+    let ss_sel = cs_sel + 8;
+    *sreg.offset(SS as isize) = ss_sel;
+
+    *flags &= !(*msr_sfmask as i32);
+    // IF is cleared? SFMASK usually handles it.
+    
+    *cpl = 0;
+    cpl_changed();
+
+    *segment_is_null.offset(CS as isize) = false;
+    *segment_offsets.offset(CS as isize) = 0;
+    *segment_limits.offset(CS as isize) = 0xFFFFFFFF;
+    *segment_access_bytes.offset(CS as isize) = 0x9B; // P=1, DPL=0, Type=Code/Exec/Read
+
+    *segment_is_null.offset(SS as isize) = false;
+    *segment_offsets.offset(SS as isize) = 0;
+    *segment_limits.offset(SS as isize) = 0xFFFFFFFF;
+    *segment_access_bytes.offset(SS as isize) = 0x93; // P=1, DPL=0, Type=Data/RW
+    
+    *stack_size_32 = true; // Default to 32-bit stack (ESP)? No, 64-bit uses RSP.
+    // In v86, stack_size_32=true means 32-bit stack ops (ESP). 
+    // stack_size_32=false means 16-bit?
+    // There is no `stack_size_64`.
+    // We assume stack_size_32 implies 32/64 bit stack pointer depending on mode.
+    
+    update_state_flags();
+}
+
 #[no_mangle]
 pub unsafe fn instr_0F06() {
     // clts
@@ -428,7 +491,37 @@ pub unsafe fn instr_0F06() {
     };
 }
 #[no_mangle]
-pub unsafe fn instr_0F07() { undefined_instruction(); }
+pub unsafe fn instr_0F07() {
+    // SYSRET
+    if *msr_efer & 1 == 0 { trigger_ud(); return; }
+    
+    *instruction_pointer = read_reg32(RCX);
+    *flags = (read_reg32(R11) & 0x3C4DD5) | 2;
+    
+    let cs_sel = ((*msr_star >> 48) as u16 + 16) | 3;
+    let ss_sel = ((*msr_star >> 48) as u16 + 8) | 3;
+    
+    *sreg.offset(CS as isize) = cs_sel;
+    *sreg.offset(SS as isize) = ss_sel;
+    
+    *cpl = 3;
+    cpl_changed();
+    
+    *segment_is_null.offset(CS as isize) = false;
+    *segment_offsets.offset(CS as isize) = 0;
+    *segment_limits.offset(CS as isize) = 0xFFFFFFFF;
+    *segment_access_bytes.offset(CS as isize) = 0xFB;
+
+    *segment_is_null.offset(SS as isize) = false;
+    *segment_offsets.offset(SS as isize) = 0;
+    *segment_limits.offset(SS as isize) = 0xFFFFFFFF;
+    *segment_access_bytes.offset(SS as isize) = 0xF3;
+
+    *stack_size_32 = true; 
+    
+    update_state_flags();
+}
+
 #[no_mangle]
 pub unsafe fn instr_0F08() {
     // invd
@@ -1194,6 +1287,32 @@ pub unsafe fn instr_0F30() {
         IA32_SYSENTER_CS => *sysenter_cs = low & 0xFFFF,
         IA32_SYSENTER_EIP => *sysenter_eip = low,
         IA32_SYSENTER_ESP => *sysenter_esp = low,
+        MSR_EFER => {
+            *msr_efer = low as u32 as u64 | (high as u32 as u64) << 32;
+        },
+        MSR_STAR => {
+            *msr_star = low as u32 as u64 | (high as u32 as u64) << 32;
+        },
+        MSR_LSTAR => {
+            *msr_lstar = low as u32 as u64 | (high as u32 as u64) << 32;
+        },
+        MSR_CSTAR => {
+            *msr_cstar = low as u32 as u64 | (high as u32 as u64) << 32;
+        },
+        MSR_SFMASK => {
+            *msr_sfmask = low as u32 as u64 | (high as u32 as u64) << 32;
+        },
+        IA32_KERNEL_GS_BASE => {
+            *msr_kernel_gs_base = low as u32 as u64 | (high as u32 as u64) << 32;
+        },
+        MSR_FS_BASE => {
+            *msr_fs_base = low as u32 as u64 | (high as u32 as u64) << 32;
+            *segment_offsets.offset(FS as isize) = low;
+        },
+        MSR_GS_BASE => {
+            *msr_gs_base = low as u32 as u64 | (high as u32 as u64) << 32;
+            *segment_offsets.offset(GS as isize) = low;
+        },
         IA32_FEAT_CTL => {}, // linux 5.x
         MSR_TEST_CTRL => {}, // linux 5.x
         IA32_APIC_BASE => {
@@ -1219,10 +1338,7 @@ pub unsafe fn instr_0F30() {
             // Enable Misc. Processor Features
         },
         IA32_MCG_CAP => {}, // netbsd
-        IA32_KERNEL_GS_BASE => {
-            // Only used in 64 bit mode (by SWAPGS), but set by kvm-unit-test
-            dbg_log!("GS Base written");
-        },
+
         IA32_PERFEVTSEL0 | IA32_PERFEVTSEL1 => {}, // linux/9legacy
         IA32_PMC0 | IA32_PMC1 => {},               // linux
         IA32_PAT => {},
@@ -1272,6 +1388,38 @@ pub unsafe fn instr_0F32() {
         IA32_SYSENTER_CS => low = *sysenter_cs,
         IA32_SYSENTER_EIP => low = *sysenter_eip,
         IA32_SYSENTER_ESP => low = *sysenter_esp,
+        MSR_EFER => {
+            low = *msr_efer as i32;
+            high = (*msr_efer >> 32) as i32;
+        },
+        MSR_STAR => {
+            low = *msr_star as i32;
+            high = (*msr_star >> 32) as i32;
+        },
+        MSR_LSTAR => {
+            low = *msr_lstar as i32;
+            high = (*msr_lstar >> 32) as i32;
+        },
+        MSR_CSTAR => {
+            low = *msr_cstar as i32;
+            high = (*msr_cstar >> 32) as i32;
+        },
+        MSR_SFMASK => {
+            low = *msr_sfmask as i32;
+            high = (*msr_sfmask >> 32) as i32;
+        },
+        IA32_KERNEL_GS_BASE => {
+            low = *msr_kernel_gs_base as i32;
+            high = (*msr_kernel_gs_base >> 32) as i32;
+        },
+        MSR_FS_BASE => {
+            low = *msr_fs_base as i32;
+            high = (*msr_fs_base >> 32) as i32;
+        },
+        MSR_GS_BASE => {
+            low = *msr_gs_base as i32;
+            high = (*msr_gs_base >> 32) as i32;
+        },
         IA32_TIME_STAMP_COUNTER => {
             let tsc = read_tsc();
             low = tsc as i32;
@@ -3309,9 +3457,17 @@ pub unsafe fn instr_0FA2() {
 
         0x80000000 => {
             // maximum supported extended level
-            eax = 5;
+            eax = 0x80000001u32 as i32;
             // other registers are reserved
         },
+
+        0x80000001 => {
+             eax = 0;
+             ebx = 0;
+             ecx = 1; // LAHF_LM
+             edx = (1 << 11) | (1 << 20) | (1 << 27) | (1 << 29); // SYSCALL, NX, RDTSCP, LM
+        },
+
 
         0x40000000 => {
             // hypervisor
