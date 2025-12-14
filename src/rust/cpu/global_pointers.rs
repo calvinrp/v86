@@ -76,6 +76,10 @@ pub const sse_scratch_register: *mut reg128 = 1136 as *mut reg128;
 
 pub const fpu_st: *mut F80 = 1152 as *mut F80;
 
+pub const reg64_high: *mut i32 = 1300 as *mut i32;
+pub const reg_r8_r15: *mut u64 = 1332 as *mut u64;
+
+
 pub fn get_reg32_offset(r: u32) -> u32 {
     dbg_assert!(r < 8);
     (unsafe { reg32.offset(r as isize) }) as u32

@@ -106,6 +106,34 @@ export function V86(options)
         "jit_clear_all_funcs": () => cpu.jit_clear_all_funcs(),
 
         "__indirect_function_table": wasm_table,
+
+        // Dummy softfloat implementations
+        "extF80M_add": () => {},
+        "extF80M_sub": () => {},
+        "extF80M_mul": () => {},
+        "extF80M_div": () => {},
+        "extF80M_sqrt": () => {},
+        "extF80M_roundToInt": () => {},
+        "extF80M_eq": () => 0,
+        "extF80M_lt": () => 0,
+        "extF80M_lt_quiet": () => 0,
+        "extF80M_to_i32": () => 0,
+        "extF80M_to_i64": () => 0n,
+        "i32_to_extF80M": () => {},
+        "i64_to_extF80M": () => {},
+        "f32_to_extF80M": () => {},
+        "f64_to_extF80M": () => {},
+        "extF80M_to_f32": () => 0,
+        "extF80M_to_f64": () => 0n,
+        "softfloat_roundingMode": new WebAssembly.Global({value: 'i32', mutable: true}, 0),
+        "extF80_roundingPrecision": new WebAssembly.Global({value: 'i32', mutable: true}, 0),
+        "softfloat_exceptionFlags": new WebAssembly.Global({value: 'i32', mutable: true}, 0),
+
+        // Dummy ZSTD implementations
+        "ZSTD_createDStream": () => 0,
+        "ZSTD_freeDStream": () => 0,
+        "ZSTD_decompressStream_simpleArgs": () => 0,
+        "ZSTD_isError": () => 0,
     };
 
     let wasm_fn = options.wasm_fn;
@@ -147,6 +175,7 @@ export function V86(options)
                         }
                         catch(err)
                         {
+                            console.error("WASM instantiation failed:", err);
                             load_file(v86_bin_fallback, {
                                     done: async bytes => {
                                         const { instance } = await WebAssembly.instantiate(bytes, env);

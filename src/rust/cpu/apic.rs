@@ -644,7 +644,7 @@ fn register_set_bit(v: &mut [u32; 8], bit: u8) { v[(bit >> 5) as usize] |= 1 << 
 fn register_clear_bit(v: &mut [u32; 8], bit: u8) { v[(bit >> 5) as usize] &= !(1 << (bit & 31)); }
 
 fn register_get_highest_bit(v: &[u32; 8]) -> Option<u8> {
-    dbg_assert!(v.as_ptr().addr() & std::mem::align_of::<u64>() - 1 == 0);
+    dbg_assert!(v.as_ptr() as usize & std::mem::align_of::<u64>() - 1 == 0);
     let v: &[u64; 4] = unsafe { std::mem::transmute(v) };
     for i in (0..4).rev() {
         let word = v[i];

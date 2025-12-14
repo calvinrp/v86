@@ -316,10 +316,10 @@ pub unsafe fn instr32_0F01_7_reg(r: i32) {
         0 => {
             // SWAPGS
             if 0 != *cpl { trigger_gp(0); return; }
-            let temp = *msr_gs_base;
-            *msr_gs_base = *msr_kernel_gs_base;
-            *msr_kernel_gs_base = temp;
-            *segment_offsets.offset(GS as isize) = *msr_gs_base as i32;
+            let temp = msr_gs_base;
+            msr_gs_base = msr_kernel_gs_base;
+            msr_kernel_gs_base = temp;
+            *segment_offsets.offset(GS as isize) = msr_gs_base as i32;
         },
         1 => {
             // RDTSCP
@@ -434,7 +434,7 @@ pub unsafe fn instr_0F04() { undefined_instruction(); }
 #[no_mangle]
 pub unsafe fn instr_0F05() {
     // SYSCALL
-    if *msr_efer & 1 == 0 {
+    if msr_efer & 1 == 0 {
         trigger_ud();
         return;
     }
@@ -443,15 +443,15 @@ pub unsafe fn instr_0F05() {
     // TODO: update_state_flags()? flags might be stale
     write_reg64(R11, *flags as u32 as u64);
 
-    *instruction_pointer = *msr_lstar as i32;
+    *instruction_pointer = msr_lstar as i32;
 
-    let cs_sel = ((*msr_star >> 32) as u16) & 0xFFFC;
+    let cs_sel = ((msr_star >> 32) as u16) & 0xFFFC;
     *sreg.offset(CS as isize) = cs_sel;
     
     let ss_sel = cs_sel + 8;
     *sreg.offset(SS as isize) = ss_sel;
 
-    *flags &= !(*msr_sfmask as i32);
+    *flags &= !(msr_sfmask as i32);
     // IF is cleared? SFMASK usually handles it.
     
     *cpl = 0;
@@ -493,13 +493,13 @@ pub unsafe fn instr_0F06() {
 #[no_mangle]
 pub unsafe fn instr_0F07() {
     // SYSRET
-    if *msr_efer & 1 == 0 { trigger_ud(); return; }
+    if msr_efer & 1 == 0 { trigger_ud(); return; }
     
     *instruction_pointer = read_reg32(RCX);
     *flags = (read_reg32(R11) & 0x3C4DD5) | 2;
     
-    let cs_sel = ((*msr_star >> 48) as u16 + 16) | 3;
-    let ss_sel = ((*msr_star >> 48) as u16 + 8) | 3;
+    let cs_sel = ((msr_star >> 48) as u16 + 16) | 3;
+    let ss_sel = ((msr_star >> 48) as u16 + 8) | 3;
     
     *sreg.offset(CS as isize) = cs_sel;
     *sreg.offset(SS as isize) = ss_sel;
@@ -1288,29 +1288,29 @@ pub unsafe fn instr_0F30() {
         IA32_SYSENTER_EIP => *sysenter_eip = low,
         IA32_SYSENTER_ESP => *sysenter_esp = low,
         MSR_EFER => {
-            *msr_efer = low as u32 as u64 | (high as u32 as u64) << 32;
+            msr_efer = low as u32 as u64 | (high as u32 as u64) << 32;
         },
         MSR_STAR => {
-            *msr_star = low as u32 as u64 | (high as u32 as u64) << 32;
+            msr_star = low as u32 as u64 | (high as u32 as u64) << 32;
         },
         MSR_LSTAR => {
-            *msr_lstar = low as u32 as u64 | (high as u32 as u64) << 32;
+            msr_lstar = low as u32 as u64 | (high as u32 as u64) << 32;
         },
         MSR_CSTAR => {
-            *msr_cstar = low as u32 as u64 | (high as u32 as u64) << 32;
+            msr_cstar = low as u32 as u64 | (high as u32 as u64) << 32;
         },
         MSR_SFMASK => {
-            *msr_sfmask = low as u32 as u64 | (high as u32 as u64) << 32;
+            msr_sfmask = low as u32 as u64 | (high as u32 as u64) << 32;
         },
         IA32_KERNEL_GS_BASE => {
-            *msr_kernel_gs_base = low as u32 as u64 | (high as u32 as u64) << 32;
+            msr_kernel_gs_base = low as u32 as u64 | (high as u32 as u64) << 32;
         },
         MSR_FS_BASE => {
-            *msr_fs_base = low as u32 as u64 | (high as u32 as u64) << 32;
+            msr_fs_base = low as u32 as u64 | (high as u32 as u64) << 32;
             *segment_offsets.offset(FS as isize) = low;
         },
         MSR_GS_BASE => {
-            *msr_gs_base = low as u32 as u64 | (high as u32 as u64) << 32;
+            msr_gs_base = low as u32 as u64 | (high as u32 as u64) << 32;
             *segment_offsets.offset(GS as isize) = low;
         },
         IA32_FEAT_CTL => {}, // linux 5.x
@@ -1389,36 +1389,36 @@ pub unsafe fn instr_0F32() {
         IA32_SYSENTER_EIP => low = *sysenter_eip,
         IA32_SYSENTER_ESP => low = *sysenter_esp,
         MSR_EFER => {
-            low = *msr_efer as i32;
-            high = (*msr_efer >> 32) as i32;
+            low = msr_efer as i32;
+            high = (msr_efer >> 32) as i32;
         },
         MSR_STAR => {
-            low = *msr_star as i32;
-            high = (*msr_star >> 32) as i32;
+            low = msr_star as i32;
+            high = (msr_star >> 32) as i32;
         },
         MSR_LSTAR => {
-            low = *msr_lstar as i32;
-            high = (*msr_lstar >> 32) as i32;
+            low = msr_lstar as i32;
+            high = (msr_lstar >> 32) as i32;
         },
         MSR_CSTAR => {
-            low = *msr_cstar as i32;
-            high = (*msr_cstar >> 32) as i32;
+            low = msr_cstar as i32;
+            high = (msr_cstar >> 32) as i32;
         },
         MSR_SFMASK => {
-            low = *msr_sfmask as i32;
-            high = (*msr_sfmask >> 32) as i32;
+            low = msr_sfmask as i32;
+            high = (msr_sfmask >> 32) as i32;
         },
         IA32_KERNEL_GS_BASE => {
-            low = *msr_kernel_gs_base as i32;
-            high = (*msr_kernel_gs_base >> 32) as i32;
+            low = msr_kernel_gs_base as i32;
+            high = (msr_kernel_gs_base >> 32) as i32;
         },
         MSR_FS_BASE => {
-            low = *msr_fs_base as i32;
-            high = (*msr_fs_base >> 32) as i32;
+            low = msr_fs_base as i32;
+            high = (msr_fs_base >> 32) as i32;
         },
         MSR_GS_BASE => {
-            low = *msr_gs_base as i32;
-            high = (*msr_gs_base >> 32) as i32;
+            low = msr_gs_base as i32;
+            high = (msr_gs_base >> 32) as i32;
         },
         IA32_TIME_STAMP_COUNTER => {
             let tsc = read_tsc();
@@ -3972,7 +3972,7 @@ pub unsafe fn instr_F20FC2_mem(addr: i32, r: i32, imm: i32) {
 pub unsafe fn instr_F30FC2(source: i32, r: i32, imm8: i32) {
     // cmpss xmm, xmm/m32
     let destination = read_xmm_f32(r);
-    let source: f32 = f32::from_bits(i32::cast_unsigned(source));
+    let source: f32 = f32::from_bits(source as u32);
     let result = if sse_comparison(imm8, destination as f64, source as f64) { -1 } else { 0 };
     write_xmm32(r, result);
 }

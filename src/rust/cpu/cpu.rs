@@ -122,6 +122,23 @@ pub const OPSIZE_16: i32 = 15;
 pub const OPSIZE_32: i32 = 31;
 
 pub const EAX: i32 = 0;
+pub const RAX: i32 = 0;
+pub const RCX: i32 = 1;
+pub const RDX: i32 = 2;
+pub const RBX: i32 = 3;
+pub const RSP: i32 = 4;
+pub const RBP: i32 = 5;
+pub const RSI: i32 = 6;
+pub const RDI: i32 = 7;
+pub const R8: i32 = 8;
+pub const R9: i32 = 9;
+pub const R10: i32 = 10;
+pub const R11: i32 = 11;
+pub const R12: i32 = 12;
+pub const R13: i32 = 13;
+pub const R14: i32 = 14;
+pub const R15: i32 = 15;
+
 pub const ECX: i32 = 1;
 pub const EDX: i32 = 2;
 pub const EBX: i32 = 3;
@@ -235,7 +252,7 @@ pub const IA32_MISC_ENABLE: i32 = 0x1A0;
 pub const IA32_PAT: i32 = 0x277;
 pub const IA32_RTIT_CTL: i32 = 0x570;
 pub const MSR_PKG_C2_RESIDENCY: i32 = 0x60D;
-pub const IA32_KERNEL_GS_BASE: i32 = 0xC0000101u32 as i32;
+pub const IA32_KERNEL_GS_BASE: i32 = 0xC0000102u32 as i32;
 pub const MSR_AMD64_LS_CFG: i32 = 0xC0011020u32 as i32;
 pub const MSR_AMD64_DE_CFG: i32 = 0xC0011029u32 as i32;
 
@@ -1957,21 +1974,6 @@ pub unsafe fn translate_address_write_and_can_skip_dirty(address: i32) -> OrPage
 // bits. However, since we support only 32-bit physical addresses, we require
 // the high half of the entry to be 0.
 #[cold]
-pub unsafe fn do_page_walk(
-    addr: i32,
-    for_writing: bool,
-    user: bool,
-    jit: bool,
-    side_effects: bool,
-) -> OrPageFault<std::num::NonZeroI32> {
-    let global;
-    let mut allow_user = true;
-    let page = (addr as u32 >> 12) as i32;
-    let high;
-
-    let cr0 = *cr;
-    let cr4 = *cr.offset(4);
-
 #[cold]
 pub unsafe fn do_page_walk(
     addr: i32,
@@ -1987,7 +1989,7 @@ pub unsafe fn do_page_walk(
 
     let cr0 = *cr;
     let cr4 = *cr.offset(4);
-    let long_mode = *msr_efer & (1 << 10) != 0;
+    let long_mode = msr_efer & (1 << 10) != 0;
 
     if cr0 & CR0_PG == 0 {
         // paging disabled
@@ -1996,7 +1998,7 @@ pub unsafe fn do_page_walk(
     }
     else if long_mode {
         profiler::stat_increment(stat::TLB_MISS);
-        let nx_enabled = *msr_efer & (1 << 11) != 0;
+        let nx_enabled = msr_efer & (1 << 11) != 0;
         let mut no_exec = false; // TODO: Check if access is fetch (not passed in args?)
 
         // Level 4: PML4
@@ -3494,7 +3496,7 @@ pub unsafe fn safe_read32s(addr: i32) -> OrPageFault<i32> {
 }
 
 pub unsafe fn safe_read_f32(addr: i32) -> OrPageFault<f32> {
-    Ok(f32::from_bits(i32::cast_unsigned(safe_read32s(addr)?)))
+    Ok(f32::from_bits(safe_read32s(addr)? as u32))
 }
 
 pub unsafe fn safe_read64s(addr: i32) -> OrPageFault<u64> {
@@ -4074,6 +4076,26 @@ pub unsafe fn write_reg32(index: i32, value: i32) {
     dbg_assert!(index >= 0 && index < 8);
     *reg32.offset(index as isize) = value;
 }
+
+pub unsafe fn read_reg64(index: i32) -> u64 {
+    if index < 8 {
+        let low = *reg32.offset(index as isize) as u32;
+        let high = *reg64_high.offset(index as isize) as u32;
+        low as u64 | (high as u64) << 32
+    } else {
+        *reg_r8_r15.offset((index - 8) as isize)
+    }
+}
+
+pub unsafe fn write_reg64(index: i32, value: u64) {
+    if index < 8 {
+        *reg32.offset(index as isize) = value as i32;
+        *reg64_high.offset(index as isize) = (value >> 32) as i32;
+    } else {
+        *reg_r8_r15.offset((index - 8) as isize) = value;
+    }
+}
+
 
 pub unsafe fn read_mmx32s(r: i32) -> i32 { (*fpu_st.offset(r as isize)).mantissa as i32 }
 
