@@ -235,7 +235,16 @@ pub const IA32_MISC_ENABLE: i32 = 0x1A0;
 pub const IA32_PAT: i32 = 0x277;
 pub const IA32_RTIT_CTL: i32 = 0x570;
 pub const MSR_PKG_C2_RESIDENCY: i32 = 0x60D;
-pub const IA32_KERNEL_GS_BASE: i32 = 0xC0000101u32 as i32;
+// x86_64 MSRs (also accessible on some 32-bit CPUs)
+pub const IA32_EFER: i32 = 0xC0000080u32 as i32;
+pub const IA32_STAR: i32 = 0xC0000081u32 as i32;
+pub const IA32_LSTAR: i32 = 0xC0000082u32 as i32;
+pub const IA32_CSTAR: i32 = 0xC0000083u32 as i32;
+pub const IA32_SFMASK: i32 = 0xC0000084u32 as i32;
+pub const IA32_FS_BASE: i32 = 0xC0000100u32 as i32;
+pub const IA32_GS_BASE: i32 = 0xC0000101u32 as i32;
+pub const IA32_KERNEL_GS_BASE: i32 = 0xC0000102u32 as i32;
+pub const IA32_TSC_AUX: i32 = 0xC0000103u32 as i32;
 pub const MSR_AMD64_LS_CFG: i32 = 0xC0011020u32 as i32;
 pub const MSR_AMD64_DE_CFG: i32 = 0xC0011029u32 as i32;
 
@@ -295,6 +304,18 @@ pub static mut cpuid_level: u32 = 0x16;
 pub static mut jit_block_boundary: bool = false;
 
 const TSC_ENABLE_IMPRECISE_BROWSER_WORKAROUND: bool = true;
+
+// Minimal model-specific registers storage used by rdmsr/wrmsr.
+// Note: Not currently included in emulator save/restore state.
+pub static mut msr_efer: u64 = 0;
+pub static mut msr_star: u64 = 0;
+pub static mut msr_lstar: u64 = 0;
+pub static mut msr_cstar: u64 = 0;
+pub static mut msr_sfmask: u64 = 0;
+pub static mut msr_fs_base: u64 = 0;
+pub static mut msr_gs_base: u64 = 0;
+pub static mut msr_kernel_gs_base: u64 = 0;
+pub static mut msr_tsc_aux: u64 = 0;
 
 #[cfg(debug_assertions)]
 const TSC_VERBOSE_LOGGING: bool = false;

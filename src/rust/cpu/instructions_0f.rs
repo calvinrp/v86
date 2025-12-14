@@ -1185,6 +1185,7 @@ pub unsafe fn instr_0F30() {
     let index = read_reg32(ECX);
     let low = read_reg32(EAX);
     let high = read_reg32(EDX);
+    let value = (low as u32 as u64) | ((high as u32 as u64) << 32);
 
     if index != IA32_SYSENTER_ESP {
         dbg_log!("wrmsr ecx={:x} data={:x}:{:x}", index, high, low);
@@ -1194,6 +1195,15 @@ pub unsafe fn instr_0F30() {
         IA32_SYSENTER_CS => *sysenter_cs = low & 0xFFFF,
         IA32_SYSENTER_EIP => *sysenter_eip = low,
         IA32_SYSENTER_ESP => *sysenter_esp = low,
+        IA32_EFER => msr_efer = value,
+        IA32_STAR => msr_star = value,
+        IA32_LSTAR => msr_lstar = value,
+        IA32_CSTAR => msr_cstar = value,
+        IA32_SFMASK => msr_sfmask = value,
+        IA32_FS_BASE => msr_fs_base = value,
+        IA32_GS_BASE => msr_gs_base = value,
+        IA32_KERNEL_GS_BASE => msr_kernel_gs_base = value,
+        IA32_TSC_AUX => msr_tsc_aux = value,
         IA32_FEAT_CTL => {}, // linux 5.x
         MSR_TEST_CTRL => {}, // linux 5.x
         IA32_APIC_BASE => {
@@ -1219,10 +1229,6 @@ pub unsafe fn instr_0F30() {
             // Enable Misc. Processor Features
         },
         IA32_MCG_CAP => {}, // netbsd
-        IA32_KERNEL_GS_BASE => {
-            // Only used in 64 bit mode (by SWAPGS), but set by kvm-unit-test
-            dbg_log!("GS Base written");
-        },
         IA32_PERFEVTSEL0 | IA32_PERFEVTSEL1 => {}, // linux/9legacy
         IA32_PMC0 | IA32_PMC1 => {},               // linux
         IA32_PAT => {},
@@ -1233,8 +1239,8 @@ pub unsafe fn instr_0F30() {
         MSR_AMD64_LS_CFG => {},    // linux 5.19
         MSR_AMD64_DE_CFG => {},    // linux 6.1
         _ => {
-            dbg_log!("Unknown msr: {:x}", index);
-            dbg_assert!(false);
+            // Modern OSes probe a wide range of MSRs. For forward compatibility, ignore unknown ones.
+            dbg_log!("Unknown msr write: {:x} = {:016x}", index, value);
         },
     }
 }
@@ -1272,6 +1278,42 @@ pub unsafe fn instr_0F32() {
         IA32_SYSENTER_CS => low = *sysenter_cs,
         IA32_SYSENTER_EIP => low = *sysenter_eip,
         IA32_SYSENTER_ESP => low = *sysenter_esp,
+        IA32_EFER => {
+            low = msr_efer as u32 as i32;
+            high = (msr_efer >> 32) as u32 as i32;
+        },
+        IA32_STAR => {
+            low = msr_star as u32 as i32;
+            high = (msr_star >> 32) as u32 as i32;
+        },
+        IA32_LSTAR => {
+            low = msr_lstar as u32 as i32;
+            high = (msr_lstar >> 32) as u32 as i32;
+        },
+        IA32_CSTAR => {
+            low = msr_cstar as u32 as i32;
+            high = (msr_cstar >> 32) as u32 as i32;
+        },
+        IA32_SFMASK => {
+            low = msr_sfmask as u32 as i32;
+            high = (msr_sfmask >> 32) as u32 as i32;
+        },
+        IA32_FS_BASE => {
+            low = msr_fs_base as u32 as i32;
+            high = (msr_fs_base >> 32) as u32 as i32;
+        },
+        IA32_GS_BASE => {
+            low = msr_gs_base as u32 as i32;
+            high = (msr_gs_base >> 32) as u32 as i32;
+        },
+        IA32_KERNEL_GS_BASE => {
+            low = msr_kernel_gs_base as u32 as i32;
+            high = (msr_kernel_gs_base >> 32) as u32 as i32;
+        },
+        IA32_TSC_AUX => {
+            low = msr_tsc_aux as u32 as i32;
+            high = (msr_tsc_aux >> 32) as u32 as i32;
+        },
         IA32_TIME_STAMP_COUNTER => {
             let tsc = read_tsc();
             low = tsc as i32;
@@ -1309,8 +1351,8 @@ pub unsafe fn instr_0F32() {
         MSR_AMD64_LS_CFG => {},    // linux 5.19
         MSR_AMD64_DE_CFG => {},    // linux 6.1
         _ => {
-            dbg_log!("Unknown msr: {:x}", index);
-            dbg_assert!(false);
+            // Modern OSes probe a wide range of MSRs. For forward compatibility, return 0 for unknown ones.
+            dbg_log!("Unknown msr read: {:x}", index);
         },
     }
 
