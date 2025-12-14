@@ -1185,6 +1185,7 @@ pub unsafe fn instr_0F30() {
     let index = read_reg32(ECX);
     let low = read_reg32(EAX);
     let high = read_reg32(EDX);
+    let value = (low as u32 as u64) | ((high as u32 as u64) << 32);
 
     if index != IA32_SYSENTER_ESP {
         dbg_log!("wrmsr ecx={:x} data={:x}:{:x}", index, high, low);
@@ -1194,6 +1195,36 @@ pub unsafe fn instr_0F30() {
         IA32_SYSENTER_CS => *sysenter_cs = low & 0xFFFF,
         IA32_SYSENTER_EIP => *sysenter_eip = low,
         IA32_SYSENTER_ESP => *sysenter_esp = low,
+        IA32_EFER => {
+            // LMA is read-only and depends on CPU state; we currently don't implement long mode.
+            let mut new_efer = value & !EFER_LMA;
+
+            // NX is not implemented in the page walker yet (it currently asserts on NX PTEs).
+            // Keep this bit masked until paging/NX support is implemented.
+            if new_efer & EFER_NXE != 0 {
+                dbg_log!("Ignoring EFER.NXE (NX not implemented)");
+                new_efer &= !EFER_NXE;
+            }
+
+            if !config::ENABLE_X86_64_EXPERIMENT {
+                // Avoid guests enabling long mode/syscall/NX prematurely.
+                let masked = new_efer & (EFER_LME | EFER_NXE | EFER_SCE);
+                if masked != 0 {
+                    dbg_log!("Ignoring EFER bits (x86_64 experiment disabled): {:x}", masked);
+                }
+                new_efer &= !(EFER_LME | EFER_NXE | EFER_SCE);
+            }
+
+            msr_efer = new_efer;
+        },
+        IA32_STAR => msr_star = value,
+        IA32_LSTAR => msr_lstar = value,
+        IA32_CSTAR => msr_cstar = value,
+        IA32_SFMASK => msr_sfmask = value,
+        IA32_FS_BASE => msr_fs_base = value,
+        IA32_GS_BASE => msr_gs_base = value,
+        IA32_KERNEL_GS_BASE => msr_kernel_gs_base = value,
+        IA32_TSC_AUX => msr_tsc_aux = value,
         IA32_FEAT_CTL => {}, // linux 5.x
         MSR_TEST_CTRL => {}, // linux 5.x
         IA32_APIC_BASE => {
@@ -1219,10 +1250,6 @@ pub unsafe fn instr_0F30() {
             // Enable Misc. Processor Features
         },
         IA32_MCG_CAP => {}, // netbsd
-        IA32_KERNEL_GS_BASE => {
-            // Only used in 64 bit mode (by SWAPGS), but set by kvm-unit-test
-            dbg_log!("GS Base written");
-        },
         IA32_PERFEVTSEL0 | IA32_PERFEVTSEL1 => {}, // linux/9legacy
         IA32_PMC0 | IA32_PMC1 => {},               // linux
         IA32_PAT => {},
@@ -1233,8 +1260,8 @@ pub unsafe fn instr_0F30() {
         MSR_AMD64_LS_CFG => {},    // linux 5.19
         MSR_AMD64_DE_CFG => {},    // linux 6.1
         _ => {
-            dbg_log!("Unknown msr: {:x}", index);
-            dbg_assert!(false);
+            // Modern OSes probe a wide range of MSRs. For forward compatibility, ignore unknown ones.
+            dbg_log!("Unknown msr write: {:x} = {:016x}", index, value);
         },
     }
 }
@@ -1272,6 +1299,42 @@ pub unsafe fn instr_0F32() {
         IA32_SYSENTER_CS => low = *sysenter_cs,
         IA32_SYSENTER_EIP => low = *sysenter_eip,
         IA32_SYSENTER_ESP => low = *sysenter_esp,
+        IA32_EFER => {
+            low = msr_efer as u32 as i32;
+            high = (msr_efer >> 32) as u32 as i32;
+        },
+        IA32_STAR => {
+            low = msr_star as u32 as i32;
+            high = (msr_star >> 32) as u32 as i32;
+        },
+        IA32_LSTAR => {
+            low = msr_lstar as u32 as i32;
+            high = (msr_lstar >> 32) as u32 as i32;
+        },
+        IA32_CSTAR => {
+            low = msr_cstar as u32 as i32;
+            high = (msr_cstar >> 32) as u32 as i32;
+        },
+        IA32_SFMASK => {
+            low = msr_sfmask as u32 as i32;
+            high = (msr_sfmask >> 32) as u32 as i32;
+        },
+        IA32_FS_BASE => {
+            low = msr_fs_base as u32 as i32;
+            high = (msr_fs_base >> 32) as u32 as i32;
+        },
+        IA32_GS_BASE => {
+            low = msr_gs_base as u32 as i32;
+            high = (msr_gs_base >> 32) as u32 as i32;
+        },
+        IA32_KERNEL_GS_BASE => {
+            low = msr_kernel_gs_base as u32 as i32;
+            high = (msr_kernel_gs_base >> 32) as u32 as i32;
+        },
+        IA32_TSC_AUX => {
+            low = msr_tsc_aux as u32 as i32;
+            high = (msr_tsc_aux >> 32) as u32 as i32;
+        },
         IA32_TIME_STAMP_COUNTER => {
             let tsc = read_tsc();
             low = tsc as i32;
@@ -1309,8 +1372,8 @@ pub unsafe fn instr_0F32() {
         MSR_AMD64_LS_CFG => {},    // linux 5.19
         MSR_AMD64_DE_CFG => {},    // linux 6.1
         _ => {
-            dbg_log!("Unknown msr: {:x}", index);
-            dbg_assert!(false);
+            // Modern OSes probe a wide range of MSRs. For forward compatibility, return 0 for unknown ones.
+            dbg_log!("Unknown msr read: {:x}", index);
         },
     }
 
@@ -3309,8 +3372,27 @@ pub unsafe fn instr_0FA2() {
 
         0x80000000 => {
             // maximum supported extended level
-            eax = 5;
-            // other registers are reserved
+            eax = 0x80000008u32 as i32;
+        },
+
+        0x80000001 => {
+            // Extended feature bits
+            // Keep conservative defaults unless explicitly experimenting with x86_64.
+            if config::ENABLE_X86_64_EXPERIMENT {
+                // EDX: Long Mode (bit 29), SYSCALL/SYSRET (bit 11)
+                edx |= 1 << 29;
+                edx |= 1 << 11;
+
+                // ECX: LAHF/SAHF in 64-bit mode (bit 0)
+                ecx |= 1 << 0;
+            }
+        },
+
+        0x80000008 => {
+            // Virtual/physical address size
+            // EAX[7:0] = physical address bits, EAX[15:8] = linear address bits.
+            // Use typical values: 36-bit physical, 48-bit virtual.
+            eax = ((48u32 << 8) | 36u32) as i32;
         },
 
         0x40000000 => {
@@ -3354,7 +3436,12 @@ pub unsafe fn instr_0FA2() {
             read_reg32(ECX),
         );
     }
-    else if level != 0 && level != 2 && level != 0x80000000 {
+    else if level != 0
+        && level != 2
+        && level != 0x80000000
+        && level != 0x80000001
+        && level != 0x80000008
+    {
         dbg_log!("cpuid: eax={:08x}", read_reg32(EAX));
     }
 
