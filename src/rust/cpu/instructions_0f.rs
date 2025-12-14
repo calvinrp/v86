@@ -1194,6 +1194,10 @@ pub unsafe fn instr_0F30() {
         IA32_SYSENTER_CS => *sysenter_cs = low & 0xFFFF,
         IA32_SYSENTER_EIP => *sysenter_eip = low,
         IA32_SYSENTER_ESP => *sysenter_esp = low,
+        MSR_EFER => {
+            *efer = (high as u64) << 32 | (low as u64);
+            dbg_log!("EFER written: {:x}", *efer);
+        },
         IA32_FEAT_CTL => {}, // linux 5.x
         MSR_TEST_CTRL => {}, // linux 5.x
         IA32_APIC_BASE => {
@@ -1272,6 +1276,10 @@ pub unsafe fn instr_0F32() {
         IA32_SYSENTER_CS => low = *sysenter_cs,
         IA32_SYSENTER_EIP => low = *sysenter_eip,
         IA32_SYSENTER_ESP => low = *sysenter_esp,
+        MSR_EFER => {
+            low = *efer as i32;
+            high = (*efer >> 32) as i32;
+        },
         IA32_TIME_STAMP_COUNTER => {
             let tsc = read_tsc();
             low = tsc as i32;

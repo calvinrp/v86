@@ -36,3 +36,20 @@ pub const CR0_EM: u32 = 1 << 2;
 pub const CR0_TS: u32 = 1 << 3;
 
 pub const CR4_TSD: u32 = 1 << 2;
+
+pub const RAX: u32 = 0;
+pub const RCX: u32 = 1;
+pub const RDX: u32 = 2;
+pub const RBX: u32 = 3;
+pub const RSP: u32 = 4;
+pub const RBP: u32 = 5;
+pub const RSI: u32 = 6;
+pub const RDI: u32 = 7;
+pub const R8: u32 = 8;
+pub const R9: u32 = 9;
+pub const R10: u32 = 10;
+pub const R11: u32 = 11;
+pub const R12: u32 = 12;
+pub const R13: u32 = 13;
+pub const R14: u32 = 14;
+pub const R15: u32 = 15;

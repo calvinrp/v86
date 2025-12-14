@@ -236,6 +236,10 @@ pub const IA32_PAT: i32 = 0x277;
 pub const IA32_RTIT_CTL: i32 = 0x570;
 pub const MSR_PKG_C2_RESIDENCY: i32 = 0x60D;
 pub const IA32_KERNEL_GS_BASE: i32 = 0xC0000101u32 as i32;
+pub const MSR_EFER: i32 = 0xC0000080u32 as i32;
+pub const EFER_LME: i32 = 1 << 8;
+pub const EFER_LMA: i32 = 1 << 10;
+pub const EFER_NXE: i32 = 1 << 11;
 pub const MSR_AMD64_LS_CFG: i32 = 0xC0011020u32 as i32;
 pub const MSR_AMD64_DE_CFG: i32 = 0xC0011029u32 as i32;
 

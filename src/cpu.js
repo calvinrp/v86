@@ -119,7 +119,7 @@ export function CPU(bus, wm, stop_idling)
 
     this.last_virt_eip = view(Int32Array, memory, 620, 1);
     this.eip_phys = view(Int32Array, memory, 624, 1);
-
+    this.efer = view(Uint32Array, memory, 628, 2);
 
     this.sysenter_cs = view(Int32Array, memory, 636, 1);
 
@@ -573,6 +573,8 @@ CPU.prototype.get_state = function()
     state[83] = this.devices.virtio_net;
     state[84] = this.devices.virtio_balloon;
 
+    state[86] = this.efer;
+
     return state;
 };
 
@@ -740,6 +742,8 @@ CPU.prototype.set_state = function(state)
     this.devices.virtio_console && this.devices.virtio_console.set_state(state[82]);
     this.devices.virtio_net && this.devices.virtio_net.set_state(state[83]);
     this.devices.virtio_balloon && this.devices.virtio_balloon.set_state(state[84]);
+
+    state[86] && this.efer.set(state[86]);
 
     this.fw_value = state[62];
 

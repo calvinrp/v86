@@ -33,6 +33,7 @@ pub const cpl: *mut u8 = 612 as *mut u8;
 pub const in_hlt: *mut bool = 616 as *mut bool;
 pub const last_virt_eip: *mut i32 = 620 as *mut i32;
 pub const eip_phys: *mut i32 = 624 as *mut i32;
+pub const efer: *mut u64 = 628 as *mut u64;
 
 pub const sysenter_cs: *mut i32 = 636 as *mut i32;
 pub const sysenter_esp: *mut i32 = 640 as *mut i32;
