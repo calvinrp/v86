@@ -1191,6 +1191,10 @@ pub unsafe fn instr_0F30() {
     }
 
     match index {
+        0xC0000080 => { // IA32_EFER
+            dbg_log!("EFER written: {:x}:{:x}", high, low);
+            *efer = (high as u64) << 32 | (low as u64);
+        },
         IA32_SYSENTER_CS => *sysenter_cs = low & 0xFFFF,
         IA32_SYSENTER_EIP => *sysenter_eip = low,
         IA32_SYSENTER_ESP => *sysenter_esp = low,
@@ -1272,6 +1276,10 @@ pub unsafe fn instr_0F32() {
         IA32_SYSENTER_CS => low = *sysenter_cs,
         IA32_SYSENTER_EIP => low = *sysenter_eip,
         IA32_SYSENTER_ESP => low = *sysenter_esp,
+        0xC0000080 => { // IA32_EFER
+            low = *efer as i32;
+            high = (*efer >> 32) as i32;
+        },
         IA32_TIME_STAMP_COUNTER => {
             let tsc = read_tsc();
             low = tsc as i32;
@@ -1339,7 +1347,7 @@ pub unsafe fn instr_0F34() {
         *segment_limits.offset(CS as isize) = -1i32 as u32;
         *segment_offsets.offset(CS as isize) = 0;
         *segment_access_bytes.offset(CS as isize) = 0x80 | (0 << 5) | 0x10 | 0x08 | 0x02; // P dpl0 S E RW
-        update_cs_size(true);
+        update_cs_size(true, false);
         *cpl = 0;
         cpl_changed();
         *sreg.offset(SS as isize) = (seg + 8) as u16;
@@ -1368,7 +1376,7 @@ pub unsafe fn instr_0F35() {
         *segment_limits.offset(CS as isize) = -1i32 as u32;
         *segment_offsets.offset(CS as isize) = 0;
         *segment_access_bytes.offset(CS as isize) = 0x80 | (3 << 5) | 0x10 | 0x08 | 0x02; // P dpl3 S E RW
-        update_cs_size(true);
+        update_cs_size(true, false);
         *cpl = 3;
         cpl_changed();
         *sreg.offset(SS as isize) = (seg + 24 | 3) as u16;

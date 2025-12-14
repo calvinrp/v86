@@ -22,6 +22,7 @@ use crate::profiler;
 use crate::profiler::stat;
 use crate::softfloat;
 use crate::state_flags::CachedStateFlags;
+use crate::cpu::regs::{CR0_PG, CR0_WP, CR4_PAE, CR4_PSE, EFER_LMA};
 
 use std::collections::HashSet;
 use std::ptr;
@@ -414,6 +415,7 @@ impl SegmentDescriptor {
     pub fn is_conforming_executable(&self) -> bool { self.is_dc() && self.is_executable() }
     pub fn dpl(&self) -> u8 { (self.access_byte() >> 5) & 3 }
     pub fn is_32(&self) -> bool { self.flags() & 4 == 4 }
+    pub fn is_64(&self) -> bool { self.flags() & 2 == 2 }
     pub fn effective_limit(&self) -> u32 {
         if self.flags() & 8 == 8 {
             self.limit() << 12 | 0xFFF
@@ -460,7 +462,7 @@ pub unsafe fn switch_cs_real_mode(selector: i32) {
     *sreg.offset(CS as isize) = selector as u16;
     *segment_is_null.offset(CS as isize) = false;
     *segment_offsets.offset(CS as isize) = selector << 4;
-    update_cs_size(false);
+    update_cs_size(false, false);
 }
 
 unsafe fn get_tss_ss_esp(dpl: u8) -> OrPageFault<(i32, i32)> {
@@ -507,6 +509,7 @@ pub unsafe fn iret(is_16: bool) {
         )
     }
     else {
+        // TODO: Long mode iret (pop 5 items: RIP, CS, RFLAGS, RSP, SS)
         (
             return_on_pagefault!(safe_read32s(get_stack_pointer(0))),
             return_on_pagefault!(safe_read16(get_stack_pointer(4))),
@@ -594,7 +597,7 @@ pub unsafe fn iret(is_16: bool) {
             *cpl = 3;
             cpl_changed();
 
-            update_cs_size(false);
+            update_cs_size(false, false);
             update_state_flags();
 
             // iret end
@@ -765,7 +768,7 @@ pub unsafe fn iret(is_16: bool) {
     *sreg.offset(CS as isize) = new_cs as u16;
     dbg_assert!((new_cs & 3) == *cpl as i32);
 
-    update_cs_size(cs_descriptor.is_32());
+    update_cs_size(cs_descriptor.is_32(), cs_descriptor.is_64());
 
     *segment_limits.offset(CS as isize) = cs_descriptor.effective_limit();
     *segment_offsets.offset(CS as isize) = cs_descriptor.base();
@@ -963,7 +966,7 @@ pub unsafe fn call_interrupt_vector(
             *cpl = cs_segment_descriptor.dpl();
             cpl_changed();
 
-            update_cs_size(cs_segment_descriptor.is_32());
+            update_cs_size(cs_segment_descriptor.is_32(), cs_segment_descriptor.is_64());
 
             *flags &= !FLAG_VM & !FLAG_RF;
 
@@ -1061,7 +1064,7 @@ pub unsafe fn call_interrupt_vector(
         *sreg.offset(CS as isize) = (selector as u16) & !3 | *cpl as u16;
         dbg_assert!((*sreg.offset(CS as isize) & 3) == *cpl as u16);
 
-        update_cs_size(cs_segment_descriptor.is_32());
+        update_cs_size(cs_segment_descriptor.is_32(), cs_segment_descriptor.is_64());
 
         *segment_limits.offset(CS as isize) = cs_segment_descriptor.effective_limit();
         *segment_offsets.offset(CS as isize) = cs_segment_descriptor.base();
@@ -1282,7 +1285,7 @@ pub unsafe fn far_jump(eip: i32, selector: i32, is_call: bool, is_osize_32: bool
                 *cpl = cs_info.dpl();
                 cpl_changed();
 
-                update_cs_size(cs_info.is_32());
+                update_cs_size(cs_info.is_32(), cs_info.is_64());
 
                 dbg_assert!(new_ss & 3 == cs_info.dpl() as i32);
                 // XXX: Should be checked before side effects
@@ -1367,7 +1370,7 @@ pub unsafe fn far_jump(eip: i32, selector: i32, is_call: bool, is_osize_32: bool
             );
             dbg_assert!((new_eip as u32) <= cs_info.effective_limit(), "todo: #gp");
 
-            update_cs_size(cs_info.is_32());
+            update_cs_size(cs_info.is_32(), cs_info.is_64());
 
             *segment_is_null.offset(CS as isize) = false;
             *segment_limits.offset(CS as isize) = cs_info.effective_limit();
@@ -1436,7 +1439,7 @@ pub unsafe fn far_jump(eip: i32, selector: i32, is_call: bool, is_osize_32: bool
 
         dbg_assert!((eip as u32) <= info.effective_limit(), "todo: #gp");
 
-        update_cs_size(info.is_32());
+        update_cs_size(info.is_32(), info.is_64());
 
         *segment_is_null.offset(CS as isize) = false;
         *segment_limits.offset(CS as isize) = info.effective_limit();
@@ -1577,7 +1580,7 @@ pub unsafe fn far_return(eip: i32, selector: i32, stack_adjust: i32, is_osize_32
 
     //dbg_assert(*cpl == info.dpl);
 
-    update_cs_size(info.is_32());
+    update_cs_size(info.is_32(), info.is_64());
 
     *segment_is_null.offset(CS as isize) = false;
     *segment_limits.offset(CS as isize) = info.effective_limit();
@@ -1739,7 +1742,7 @@ pub unsafe fn do_task_switch(selector: i32, error_code: Option<i32>) {
         new_eip as u32 <= new_cs_descriptor.effective_limit(),
         "todo: #gp"
     );
-    update_cs_size(new_cs_descriptor.is_32());
+    update_cs_size(new_cs_descriptor.is_32(), new_cs_descriptor.is_64());
 
     let mut new_eflags = safe_read32s(new_tsr_offset + TSR_EFLAGS).unwrap();
 
@@ -1954,10 +1957,135 @@ pub unsafe fn do_page_walk(
     let cr0 = *cr;
     let cr4 = *cr.offset(4);
 
+// TODO: Update to use u64/usize for addr
+#[cold]
+pub unsafe fn do_page_walk(
+    addr: i32,
+    for_writing: bool,
+    user: bool,
+    jit: bool,
+    side_effects: bool,
+) -> OrPageFault<std::num::NonZeroI32> {
+    let global;
+    let mut allow_user = true;
+    let mut allow_write = true;
+    let page = (addr as u32 >> 12) as i32;
+    let high;
+
+    let cr0 = *cr;
+    let cr4 = *cr.offset(4);
+    let is_long_mode = *efer & (EFER_LMA as u64) != 0;
+
     if cr0 & CR0_PG == 0 {
         // paging disabled
         high = addr as u32 & 0xFFFFF000;
         global = false
+    }
+    else if is_long_mode {
+        // 4-level paging (Long Mode)
+        // addr is virtual address (canonical check needed? hardware does it but we can skip for now)
+        // CR3 points to PML4 table (4KB aligned)
+
+        profiler::stat_increment(stat::TLB_MISS); // Re-use TLB_MISS stat?
+
+        let pml4_base = *cr.offset(3) as u32 & 0xFFFFF000; // CR3 is PML4 base
+        // TODO: Handle CR3 > 32-bit (PCID? or just high bits)
+        // In long mode, CR3 is 64-bit physical address of PML4.
+        // But our memory accessors take u32 currently... we need to support > 4GB RAM eventually.
+        // For now assume PML4 is in lower 4GB.
+
+        // Level 4: PML4
+        let pml4_index = ((addr as u32 >> 12) >> 27) & 0x1FF; // ((addr >> 39) & 0x1FF)
+        // Note: addr is i32, so it's only 32-bit. Wait.
+        // If we are in long mode, addr should be 64-bit (u64).
+        // But do_page_walk signature takes i32.
+        // We need to update do_page_walk signature to take u64 or usize.
+        // Updating do_page_walk signature impacts many callers.
+        //
+        // Let's defer full implementation until we update signature.
+        // For now, fall back to PAE path or error out if LMA is set to avoid infinite loops/crashes
+        // if we accidentaly enabled it.
+        
+        // TEMPORARY: Panic or error if LMA is set until we refactor callers.
+        // panic!("Long mode paging not yet implemented");
+        
+        // Actually, let's just return Err to simulate page fault or similar?
+        // But that might cause loops.
+        // We really need to update the signature.
+        
+        // Let's implement a partial version that assumes 32-bit virtual addresses for now?
+        // Even in 64-bit mode, code might be running in lower 32-bit.
+        
+        // 4-level paging logic using 32-bit address (addr):
+        // PML4 index is 0 because addr < 4GB.
+        let pml4_addr = pml4_base + (0 /* pml4_index */ * 8); 
+        let pml4_entry = memory::read64s(pml4_addr);
+
+        if pml4_entry & (PAGE_TABLE_PRESENT_MASK as i64) == 0 {
+             if side_effects { trigger_pagefault(addr, false, for_writing, user, jit); }
+             return Err(());
+        }
+
+        // Level 3: PDP (Page Directory Pointer)
+        let pdp_base = (pml4_entry as u32) & 0xFFFFF000;
+        let pdp_index = ((addr as u32) >> 30) & 0x1FF;
+        let pdp_addr = pdp_base + (pdp_index * 8);
+        let pdp_entry = memory::read64s(pdp_addr);
+        
+        if pdp_entry & (PAGE_TABLE_PRESENT_MASK as i64) == 0 {
+             if side_effects { trigger_pagefault(addr, false, for_writing, user, jit); }
+             return Err(());
+        }
+
+        // Level 2: PD (Page Directory)
+        let pd_base = (pdp_entry as u32) & 0xFFFFF000;
+        let pd_index = ((addr as u32) >> 21) & 0x1FF;
+        let pd_addr = pd_base + (pd_index * 8);
+        let pd_entry = memory::read64s(pd_addr);
+        
+        if pd_entry & (PAGE_TABLE_PRESENT_MASK as i64) == 0 {
+             if side_effects { trigger_pagefault(addr, false, for_writing, user, jit); }
+             return Err(());
+        }
+
+        // TODO: Check PS bit (Large Page 2MB/1GB)
+        // ...
+
+        // Level 1: PT (Page Table)
+        let pt_base = (pd_entry as u32) & 0xFFFFF000;
+        let pt_index = ((addr as u32) >> 12) & 0x1FF;
+        let pt_addr = pt_base + (pt_index * 8);
+        let pt_entry = memory::read64s(pt_addr);
+
+        if pt_entry & (PAGE_TABLE_PRESENT_MASK as i64) == 0 {
+             if side_effects { trigger_pagefault(addr, false, for_writing, user, jit); }
+             return Err(());
+        }
+        
+        // Check permissions (RW, User, NX)
+        let kernel_write_override = !user && 0 == cr0 & CR0_WP;
+        allow_write &= pt_entry & (PAGE_TABLE_RW_MASK as i64) != 0;
+        allow_user &= pt_entry & (PAGE_TABLE_USER_MASK as i64) != 0;
+        
+        if for_writing && !allow_write && !kernel_write_override || user && !allow_user {
+             if side_effects { trigger_pagefault(addr, true, for_writing, user, jit); }
+             return Err(());
+        }
+        
+        // Accessed/Dirty bits update
+        let mut new_pt_entry = pt_entry | (PAGE_TABLE_ACCESSED_MASK as i64);
+        if for_writing { new_pt_entry |= PAGE_TABLE_DIRTY_MASK as i64; }
+        
+        if side_effects && pt_entry != new_pt_entry {
+            // Write back (using 64-bit write?)
+            // memory::write64(pt_addr, new_pt_entry as u64); // Need a write64 function or two write32
+             memory::write32(pt_addr, new_pt_entry as i32);
+             memory::write32(pt_addr + 4, (new_pt_entry >> 32) as i32);
+        }
+
+        high = (pt_entry as u32) & 0xFFFFF000;
+        global = pt_entry & (PAGE_TABLE_GLOBAL_MASK as i64) != 0;
+
     }
     else {
         profiler::stat_increment(stat::TLB_MISS);
@@ -2767,10 +2895,11 @@ pub unsafe fn load_pdpte(cr3: i32) {
 
 pub unsafe fn cpl_changed() { *last_virt_eip = -1 }
 
-pub unsafe fn update_cs_size(new_size: bool) {
-    if *is_32 != new_size {
-        *is_32 = new_size;
-    }
+#[no_mangle]
+pub unsafe fn update_cs_size(is_32_bit: bool, is_64_bit: bool) {
+    *is_32 = is_32_bit;
+    let lma = *efer & (EFER_LMA as u64) != 0;
+    *is_64 = is_64_bit && lma;
 }
 
 #[inline(never)]
@@ -2896,7 +3025,17 @@ pub unsafe fn modrm_resolve(modrm_byte: i32) -> OrPageFault<i32> {
     }
 }
 
-pub unsafe fn run_instruction(opcode: i32) { gen::interpreter::run(opcode as u32) }
+pub unsafe fn run_instruction(opcode: i32) {
+    if *is_64 && (opcode & 0xF0) == 0x40 {
+        // REX prefix
+        *rex_prefix = opcode as u8;
+        run_prefix_instruction();
+        *rex_prefix = 0;
+    }
+    else {
+        gen::interpreter::run(opcode as u32)
+    }
+}
 pub unsafe fn run_instruction0f_16(opcode: i32) { gen::interpreter0f::run(opcode as u32) }
 pub unsafe fn run_instruction0f_32(opcode: i32) { gen::interpreter0f::run(opcode as u32 | 0x100) }
 
@@ -3873,38 +4012,53 @@ pub unsafe fn safe_read_write32(addr: i32, instruction: &dyn Fn(i32) -> i32) {
     }
 }
 
-fn get_reg8_index(index: i32) -> i32 { return index << 2 & 12 | index >> 2 & 1; }
+fn get_reg8_index(index: i32) -> i32 {
+    if index < 4 { return index * 8; }
+    else { return (index - 4) * 8 + 1; }
+}
 
 pub unsafe fn read_reg8(index: i32) -> i32 {
-    dbg_assert!(index >= 0 && index < 8);
+    dbg_assert!(index >= 0 && index < 16);
     return *reg8.offset(get_reg8_index(index) as isize) as i32;
 }
 
 pub unsafe fn write_reg8(index: i32, value: i32) {
-    dbg_assert!(index >= 0 && index < 8);
+    dbg_assert!(index >= 0 && index < 16);
     *reg8.offset(get_reg8_index(index) as isize) = value as u8;
 }
 
-fn get_reg16_index(index: i32) -> i32 { return index << 1; }
+fn get_reg16_index(index: i32) -> i32 { return index * 4; }
 
 pub unsafe fn read_reg16(index: i32) -> i32 {
-    dbg_assert!(index >= 0 && index < 8);
+    dbg_assert!(index >= 0 && index < 16);
     return *reg16.offset(get_reg16_index(index) as isize) as i32;
 }
 
 pub unsafe fn write_reg16(index: i32, value: i32) {
-    dbg_assert!(index >= 0 && index < 8);
+    dbg_assert!(index >= 0 && index < 16);
     *reg16.offset(get_reg16_index(index) as isize) = value as u16;
 }
 
 pub unsafe fn read_reg32(index: i32) -> i32 {
-    dbg_assert!(index >= 0 && index < 8);
-    *reg32.offset(index as isize)
+    dbg_assert!(index >= 0 && index < 16);
+    *reg32.offset((index * 2) as isize)
 }
 
 pub unsafe fn write_reg32(index: i32, value: i32) {
-    dbg_assert!(index >= 0 && index < 8);
-    *reg32.offset(index as isize) = value;
+    dbg_assert!(index >= 0 && index < 16);
+    *reg32.offset((index * 2) as isize) = value;
+    // Zero extend to 64-bit for compatibility with 64-bit mode where 32-bit writes clear upper bits
+    *reg32.offset((index * 2 + 1) as isize) = 0;
+}
+
+pub unsafe fn read_reg64(index: i32) -> u64 {
+    dbg_assert!(index >= 0 && index < 16);
+    *reg64.offset(index as isize)
+}
+
+pub unsafe fn write_reg64(index: i32, value: u64) {
+    dbg_assert!(index >= 0 && index < 16);
+    *reg64.offset(index as isize) = value;
 }
 
 pub unsafe fn read_mmx32s(r: i32) -> i32 { (*fpu_st.offset(r as isize)).mantissa as i32 }

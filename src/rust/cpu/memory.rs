@@ -21,12 +21,47 @@ use crate::cpu::ioapic;
 use crate::cpu::vga;
 use crate::jit;
 use crate::page::Page;
+use crate::cpu::paging::{do_page_walk};
+use crate::cpu::global_pointers::{cr, efer, protected_mode, is_32};
+use crate::cpu::regs::{CR0_PG, CR4_PAE, EFER_LMA};
 
 use std::alloc;
 use std::ptr;
 
 #[allow(non_upper_case_globals)]
 pub static mut mem8: *mut u8 = ptr::null_mut();
+
+// Helper to translate virtual to physical address
+// This is a simplified version of translate_address_read from paging.rs but exposed for memory ops
+// Note: This logic duplicates paging.rs partially. In a real impl, we should consolidate.
+// For now we assume this is called for guest virtual addresses.
+unsafe fn virt_to_phys_read(addr: u32) -> Result<u32, ()> {
+    if !*protected_mode || (*cr & CR0_PG as i32) == 0 {
+        return Ok(addr);
+    }
+    // We only support 32-bit paging in this stub for now, need to hook up do_page_walk properly.
+    // However, do_page_walk in paging.rs handles the complexity.
+    // Since we are in memory.rs, we are at the bottom of the stack usually.
+    // If we want to support paging for all memory accesses, we need to use do_page_walk.
+    
+    // BUT: The existing codebase seems to rely on JIT or specific instructions calling translate_address.
+    // The memory::read/write functions seem to be PHYSICAL address accessors or assume identity mapping/already translated?
+    // Let's check where memory::read32 is called.
+    // It's called from instructions, which means it might expect VIRTUAL addresses if paging is on.
+    // Wait, the JIT emits safe_read which calls translate_address_read_jit.
+    // The interpreter calls safe_readXX which calls translate_address_read.
+    // The functions in memory.rs (read8, read32, etc) are typically called with PHYSICAL addresses
+    // OR they are called by the interpreter after translation.
+    //
+    // Looking at safe_read8 in paging.rs (not shown here but likely exists or similar):
+    // It calls translate_address_read, then calls memory::read8.
+    // So memory::read8 takes PHYSICAL addresses (or at least "linear" addresses that map 1:1 if paging off).
+    
+    // For 64-bit support, physical addresses might be > 32-bit (up to 52-bit).
+    // The existing memory.rs uses u32 for addr. This needs to change to u64 or usize.
+    
+    Ok(addr)
+}
 
 #[no_mangle]
 pub fn allocate_memory(size: u32) -> usize {
@@ -83,6 +118,7 @@ pub fn in_svga_lfb(addr: u32) -> bool {
 
 #[no_mangle]
 pub fn read8(addr: u32) -> i32 {
+    // Check for high bits if we were using u64, but for now addr is u32.
     if in_mapped_range(addr) {
         if in_svga_lfb(addr) {
             unsafe { *vga_mem8.offset((addr - VGA_LFB_ADDRESS) as isize) as i32 }

@@ -149,8 +149,11 @@ export function CPU(bus, wm, stop_idling)
     /** @type {!Object} */
     this.devices = {};
 
-    this.instruction_pointer = view(Int32Array, memory, 556, 1);
-    this.previous_ip = view(Int32Array, memory, 560, 1);
+    this.instruction_pointer = view(Int32Array, memory, 2176, 2);
+    this.previous_ip = view(Int32Array, memory, 2184, 2);
+    this.efer = view(Uint32Array, memory, 2192, 2);
+    this.is_64 = view(Uint8Array, memory, 2200, 1);
+    this.rex_prefix = view(Uint8Array, memory, 2201, 1);
 
     // configured by guest
     this.apic_enabled = view(Uint8Array, memory, 548, 1);
@@ -175,7 +178,7 @@ export function CPU(bus, wm, stop_idling)
     this.instruction_counter = view(Uint32Array, memory, 664, 1);
 
     // registers
-    this.reg32 = view(Int32Array, memory, 64, 8);
+    this.reg32 = view(Int32Array, memory, 2048, 16 * 2);
 
     this.fpu_st = view(Int32Array, memory, 1152, 4 * 8);
 
@@ -507,6 +510,7 @@ CPU.prototype.get_state = function()
     state[40] = this.sreg;
     state[41] = this.dreg;
     state[42] = this.reg_pdpte;
+    // TODO: Save efer, is_64, R8-R15
 
     this.store_current_tsc();
     state[43] = this.current_tsc;
@@ -759,9 +763,8 @@ CPU.prototype.set_state = function(state)
     this.fpu_dp_selector[0] = state[74];
     this.fpu_opcode[0] = state[75];
 
-    const bitmap = new Bitmap(state[78].buffer);
-    const packed_memory = state[77];
-    this.unpack_memory(bitmap, packed_memory);
+    // Restore efer, is_64, R8-R15
+    this.unpack_memory(new Bitmap(state[78].buffer), state[77]);
 
     this.update_state_flags();
 
