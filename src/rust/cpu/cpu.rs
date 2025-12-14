@@ -248,6 +248,12 @@ pub const IA32_TSC_AUX: i32 = 0xC0000103u32 as i32;
 pub const MSR_AMD64_LS_CFG: i32 = 0xC0011020u32 as i32;
 pub const MSR_AMD64_DE_CFG: i32 = 0xC0011029u32 as i32;
 
+// IA32_EFER bits (AMD64 Architecture Programmer’s Manual / Intel SDM).
+pub const EFER_SCE: u64 = 1 << 0;
+pub const EFER_LME: u64 = 1 << 8;
+pub const EFER_LMA: u64 = 1 << 10;
+pub const EFER_NXE: u64 = 1 << 11;
+
 pub const IA32_APIC_BASE_BSP: i32 = 1 << 8;
 pub const IA32_APIC_BASE_EXTD: i32 = 1 << 10;
 pub const IA32_APIC_BASE_EN: i32 = 1 << 11;
@@ -2738,6 +2744,17 @@ pub unsafe fn set_cr0(cr0: i32) {
 
     if old_cr0 & (CR0_PG | CR0_WP) != cr0 & (CR0_PG | CR0_WP) {
         full_clear_tlb();
+    }
+
+    // Long mode entry is requested when paging is enabled with PAE and EFER.LME is set.
+    // We don't implement x86_64 yet; fail fast with a clear message when experiment mode is enabled.
+    if crate::config::ENABLE_X86_64_EXPERIMENT
+        && (cr0 & CR0_PG) != 0
+        && (*cr.offset(4) & CR4_PAE) != 0
+        && (msr_efer & EFER_LME) != 0
+    {
+        dbg_log!("x86_64 long mode entry requested (EFER.LME + CR4.PAE + CR0.PG), but long mode is not implemented yet");
+        panic!("x86_64 long mode not implemented");
     }
 
     if *cr.offset(4) & CR4_PAE != 0

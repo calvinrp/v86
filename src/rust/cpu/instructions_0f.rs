@@ -1195,7 +1195,28 @@ pub unsafe fn instr_0F30() {
         IA32_SYSENTER_CS => *sysenter_cs = low & 0xFFFF,
         IA32_SYSENTER_EIP => *sysenter_eip = low,
         IA32_SYSENTER_ESP => *sysenter_esp = low,
-        IA32_EFER => msr_efer = value,
+        IA32_EFER => {
+            // LMA is read-only and depends on CPU state; we currently don't implement long mode.
+            let mut new_efer = value & !EFER_LMA;
+
+            // NX is not implemented in the page walker yet (it currently asserts on NX PTEs).
+            // Keep this bit masked until paging/NX support is implemented.
+            if new_efer & EFER_NXE != 0 {
+                dbg_log!("Ignoring EFER.NXE (NX not implemented)");
+                new_efer &= !EFER_NXE;
+            }
+
+            if !config::ENABLE_X86_64_EXPERIMENT {
+                // Avoid guests enabling long mode/syscall/NX prematurely.
+                let masked = new_efer & (EFER_LME | EFER_NXE | EFER_SCE);
+                if masked != 0 {
+                    dbg_log!("Ignoring EFER bits (x86_64 experiment disabled): {:x}", masked);
+                }
+                new_efer &= !(EFER_LME | EFER_NXE | EFER_SCE);
+            }
+
+            msr_efer = new_efer;
+        },
         IA32_STAR => msr_star = value,
         IA32_LSTAR => msr_lstar = value,
         IA32_CSTAR => msr_cstar = value,
@@ -3351,8 +3372,27 @@ pub unsafe fn instr_0FA2() {
 
         0x80000000 => {
             // maximum supported extended level
-            eax = 5;
-            // other registers are reserved
+            eax = 0x80000008u32 as i32;
+        },
+
+        0x80000001 => {
+            // Extended feature bits
+            // Keep conservative defaults unless explicitly experimenting with x86_64.
+            if config::ENABLE_X86_64_EXPERIMENT {
+                // EDX: Long Mode (bit 29), SYSCALL/SYSRET (bit 11)
+                edx |= 1 << 29;
+                edx |= 1 << 11;
+
+                // ECX: LAHF/SAHF in 64-bit mode (bit 0)
+                ecx |= 1 << 0;
+            }
+        },
+
+        0x80000008 => {
+            // Virtual/physical address size
+            // EAX[7:0] = physical address bits, EAX[15:8] = linear address bits.
+            // Use typical values: 36-bit physical, 48-bit virtual.
+            eax = ((48u32 << 8) | 36u32) as i32;
         },
 
         0x40000000 => {
@@ -3396,7 +3436,12 @@ pub unsafe fn instr_0FA2() {
             read_reg32(ECX),
         );
     }
-    else if level != 0 && level != 2 && level != 0x80000000 {
+    else if level != 0
+        && level != 2
+        && level != 0x80000000
+        && level != 0x80000001
+        && level != 0x80000008
+    {
         dbg_log!("cpuid: eax={:08x}", read_reg32(EAX));
     }
 
