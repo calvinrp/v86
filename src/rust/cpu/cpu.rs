@@ -122,6 +122,23 @@ pub const OPSIZE_16: i32 = 15;
 pub const OPSIZE_32: i32 = 31;
 
 pub const EAX: i32 = 0;
+pub const RAX: i32 = 0;
+pub const RCX: i32 = 1;
+pub const RDX: i32 = 2;
+pub const RBX: i32 = 3;
+pub const RSP: i32 = 4;
+pub const RBP: i32 = 5;
+pub const RSI: i32 = 6;
+pub const RDI: i32 = 7;
+pub const R8: i32 = 8;
+pub const R9: i32 = 9;
+pub const R10: i32 = 10;
+pub const R11: i32 = 11;
+pub const R12: i32 = 12;
+pub const R13: i32 = 13;
+pub const R14: i32 = 14;
+pub const R15: i32 = 15;
+
 pub const ECX: i32 = 1;
 pub const EDX: i32 = 2;
 pub const EBX: i32 = 3;
@@ -235,7 +252,7 @@ pub const IA32_MISC_ENABLE: i32 = 0x1A0;
 pub const IA32_PAT: i32 = 0x277;
 pub const IA32_RTIT_CTL: i32 = 0x570;
 pub const MSR_PKG_C2_RESIDENCY: i32 = 0x60D;
-pub const IA32_KERNEL_GS_BASE: i32 = 0xC0000101u32 as i32;
+pub const IA32_KERNEL_GS_BASE: i32 = 0xC0000102u32 as i32;
 pub const MSR_AMD64_LS_CFG: i32 = 0xC0011020u32 as i32;
 pub const MSR_AMD64_DE_CFG: i32 = 0xC0011029u32 as i32;
 
@@ -291,6 +308,24 @@ pub const LOOP_COUNTER: i32 = 100_003;
 pub const TSC_RATE: f64 = 1_000_000.0;
 
 pub static mut cpuid_level: u32 = 0x16;
+
+pub static mut msr_efer: u64 = 0;
+pub static mut msr_star: u64 = 0;
+pub static mut msr_lstar: u64 = 0;
+pub static mut msr_cstar: u64 = 0;
+pub static mut msr_sfmask: u64 = 0;
+pub static mut msr_kernel_gs_base: u64 = 0;
+pub static mut msr_fs_base: u64 = 0;
+pub static mut msr_gs_base: u64 = 0;
+
+pub const MSR_EFER: i32 = 0xC0000080u32 as i32;
+pub const MSR_STAR: i32 = 0xC0000081u32 as i32;
+pub const MSR_LSTAR: i32 = 0xC0000082u32 as i32;
+pub const MSR_CSTAR: i32 = 0xC0000083u32 as i32;
+pub const MSR_SFMASK: i32 = 0xC0000084u32 as i32;
+pub const MSR_FS_BASE: i32 = 0xC0000100u32 as i32;
+pub const MSR_GS_BASE: i32 = 0xC0000101u32 as i32;
+
 
 pub static mut jit_block_boundary: bool = false;
 
@@ -1939,6 +1974,7 @@ pub unsafe fn translate_address_write_and_can_skip_dirty(address: i32) -> OrPage
 // bits. However, since we support only 32-bit physical addresses, we require
 // the high half of the entry to be 0.
 #[cold]
+#[cold]
 pub unsafe fn do_page_walk(
     addr: i32,
     for_writing: bool,
@@ -1953,14 +1989,148 @@ pub unsafe fn do_page_walk(
 
     let cr0 = *cr;
     let cr4 = *cr.offset(4);
+    let long_mode = msr_efer & (1 << 10) != 0;
 
     if cr0 & CR0_PG == 0 {
         // paging disabled
         high = addr as u32 & 0xFFFFF000;
         global = false
     }
+    else if long_mode {
+        profiler::stat_increment(stat::TLB_MISS);
+        let nx_enabled = msr_efer & (1 << 11) != 0;
+        let mut no_exec = false; // TODO: Check if access is fetch (not passed in args?)
+
+        // Level 4: PML4
+        let pml4_base = *cr.offset(3) & !0xFFF;
+        let pml4_idx = ((addr as i64 as u64) >> 39) & 0x1FF;
+        let pml4_entry_addr = (pml4_base as u32) + (pml4_idx as u32 * 8);
+        let pml4_entry = memory::read64s(pml4_entry_addr) as u64;
+
+        if pml4_entry & 1 == 0 {
+             if side_effects { trigger_pagefault(addr, false, for_writing, user, jit); }
+             return Err(());
+        }
+
+        let mut allow_write = pml4_entry & 2 != 0;
+        allow_user &= pml4_entry & 4 != 0;
+        if nx_enabled && (pml4_entry & (1<<63)) != 0 { no_exec = true; }
+
+        // Level 3: PDPT
+        let pdpt_base = (pml4_entry & 0x000FFFFFFFFFF000) as u32;
+        let pdpt_idx = ((addr as i64 as u64) >> 30) & 0x1FF;
+        let pdpt_entry_addr = pdpt_base + (pdpt_idx as u32 * 8);
+        let pdpt_entry = memory::read64s(pdpt_entry_addr) as u64;
+
+        if pdpt_entry & 1 == 0 {
+             if side_effects { trigger_pagefault(addr, false, for_writing, user, jit); }
+             return Err(());
+        }
+
+        allow_write &= pdpt_entry & 2 != 0;
+        allow_user &= pdpt_entry & 4 != 0;
+        if nx_enabled && (pdpt_entry & (1<<63)) != 0 { no_exec = true; }
+
+        // Check 1GB page (bit 7)
+        if (pdpt_entry & (1<<7)) != 0 {
+            // 1GB Page
+            // Phys addr = (pdpt_entry & ...) + (addr & 0x3FFFFFFF)
+            // v86 doesn't support 1GB pages in TLB structure easily (assumes 4KB)
+            // But we can map it as 4KB entries in TLB?
+            // "high" is the physical address of the page.
+            // If it's a huge page, high should be adjusted.
+             
+            // For now, assume no 1GB pages or fallback.
+            // But Linux might use them.
+            // Let's treat it as a large page.
+            
+            // Allow write/user checks...
+            
+            // Check protection
+            let kernel_write_override = !user && 0 == cr0 & CR0_WP;
+            if for_writing && !allow_write && !kernel_write_override || user && !allow_user {
+                 if side_effects { trigger_pagefault(addr, true, for_writing, user, jit); }
+                 return Err(());
+            }
+
+            // A/D bits
+            let new_pdpt_entry = pdpt_entry | PAGE_TABLE_ACCESSED_MASK as u64 | if for_writing { PAGE_TABLE_DIRTY_MASK as u64 } else { 0 };
+            if side_effects && pdpt_entry != new_pdpt_entry {
+                 memory::write8(pdpt_entry_addr, new_pdpt_entry as i32); // Write low byte is enough for A/D
+            }
+            
+            // Physical address
+            // 1GB page: bits 29:0 of addr are offset.
+            high = (pdpt_entry as u32 & 0xC0000000) | (addr as u32 & 0x3FFFFFFF) & 0xFFFFF000;
+            global = pdpt_entry & PAGE_TABLE_GLOBAL_MASK as u64 != 0;
+        }
+        else {
+            // Level 2: PD
+            let pd_base = (pdpt_entry & 0x000FFFFFFFFFF000) as u32;
+            let pd_idx = ((addr as i64 as u64) >> 21) & 0x1FF;
+            let pd_entry_addr = pd_base + (pd_idx as u32 * 8);
+            let pd_entry = memory::read64s(pd_entry_addr) as u64;
+
+            if pd_entry & 1 == 0 {
+                 if side_effects { trigger_pagefault(addr, false, for_writing, user, jit); }
+                 return Err(());
+            }
+
+            allow_write &= pd_entry & 2 != 0;
+            allow_user &= pd_entry & 4 != 0;
+            if nx_enabled && (pd_entry & (1<<63)) != 0 { no_exec = true; }
+
+            if (pd_entry & (1<<7)) != 0 {
+                // 2MB Page
+                let kernel_write_override = !user && 0 == cr0 & CR0_WP;
+                if for_writing && !allow_write && !kernel_write_override || user && !allow_user {
+                     if side_effects { trigger_pagefault(addr, true, for_writing, user, jit); }
+                     return Err(());
+                }
+
+                let new_pd_entry = pd_entry | PAGE_TABLE_ACCESSED_MASK as u64 | if for_writing { PAGE_TABLE_DIRTY_MASK as u64 } else { 0 };
+                if side_effects && pd_entry != new_pd_entry {
+                     memory::write8(pd_entry_addr, new_pd_entry as i32);
+                }
+
+                high = (pd_entry as u32 & 0xFFE00000) | (addr as u32 & 0x1FF000);
+                global = pd_entry & PAGE_TABLE_GLOBAL_MASK as u64 != 0;
+            }
+            else {
+                // Level 1: PT
+                let pt_base = (pd_entry & 0x000FFFFFFFFFF000) as u32;
+                let pt_idx = ((addr as i64 as u64) >> 12) & 0x1FF;
+                let pt_entry_addr = pt_base + (pt_idx as u32 * 8);
+                let pt_entry = memory::read64s(pt_entry_addr) as u64;
+
+                if pt_entry & 1 == 0 {
+                     if side_effects { trigger_pagefault(addr, false, for_writing, user, jit); }
+                     return Err(());
+                }
+
+                allow_write &= pt_entry & 2 != 0;
+                allow_user &= pt_entry & 4 != 0;
+                if nx_enabled && (pt_entry & (1<<63)) != 0 { no_exec = true; }
+
+                let kernel_write_override = !user && 0 == cr0 & CR0_WP;
+                if for_writing && !allow_write && !kernel_write_override || user && !allow_user {
+                     if side_effects { trigger_pagefault(addr, true, for_writing, user, jit); }
+                     return Err(());
+                }
+
+                let new_pt_entry = pt_entry | PAGE_TABLE_ACCESSED_MASK as u64 | if for_writing { PAGE_TABLE_DIRTY_MASK as u64 } else { 0 };
+                if side_effects && pt_entry != new_pt_entry {
+                     memory::write8(pt_entry_addr, new_pt_entry as i32);
+                }
+
+                high = pt_entry as u32 & 0xFFFFF000;
+                global = pt_entry & PAGE_TABLE_GLOBAL_MASK as u64 != 0;
+            }
+        }
+    }
     else {
         profiler::stat_increment(stat::TLB_MISS);
+
 
         let pae = cr4 & CR4_PAE != 0;
 
@@ -3326,7 +3496,7 @@ pub unsafe fn safe_read32s(addr: i32) -> OrPageFault<i32> {
 }
 
 pub unsafe fn safe_read_f32(addr: i32) -> OrPageFault<f32> {
-    Ok(f32::from_bits(i32::cast_unsigned(safe_read32s(addr)?)))
+    Ok(f32::from_bits(safe_read32s(addr)? as u32))
 }
 
 pub unsafe fn safe_read64s(addr: i32) -> OrPageFault<u64> {
@@ -3906,6 +4076,26 @@ pub unsafe fn write_reg32(index: i32, value: i32) {
     dbg_assert!(index >= 0 && index < 8);
     *reg32.offset(index as isize) = value;
 }
+
+pub unsafe fn read_reg64(index: i32) -> u64 {
+    if index < 8 {
+        let low = *reg32.offset(index as isize) as u32;
+        let high = *reg64_high.offset(index as isize) as u32;
+        low as u64 | (high as u64) << 32
+    } else {
+        *reg_r8_r15.offset((index - 8) as isize)
+    }
+}
+
+pub unsafe fn write_reg64(index: i32, value: u64) {
+    if index < 8 {
+        *reg32.offset(index as isize) = value as i32;
+        *reg64_high.offset(index as isize) = (value >> 32) as i32;
+    } else {
+        *reg_r8_r15.offset((index - 8) as isize) = value;
+    }
+}
+
 
 pub unsafe fn read_mmx32s(r: i32) -> i32 { (*fpu_st.offset(r as isize)).mantissa as i32 }
 
