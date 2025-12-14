@@ -4,9 +4,10 @@ use crate::cpu::cpu::reg128;
 use crate::softfloat::F80;
 use crate::state_flags::CachedStateFlags;
 
-pub const reg8: *mut u8 = 64 as *mut u8;
-pub const reg16: *mut u16 = 64 as *mut u16;
-pub const reg32: *mut i32 = 64 as *mut i32;
+pub const reg8: *mut u8 = 2048 as *mut u8;
+pub const reg16: *mut u16 = 2048 as *mut u16;
+pub const reg32: *mut i32 = 2048 as *mut i32;
+pub const reg64: *mut u64 = 2048 as *mut u64;
 
 pub const last_op_size: *mut i32 = 96 as *mut i32;
 pub const flags_changed: *mut i32 = 100 as *mut i32;
@@ -22,8 +23,10 @@ pub const page_fault: *mut bool = 540 as *mut bool;
 pub const apic_enabled: *mut bool = 548 as *mut bool;
 pub const acpi_enabled: *mut bool = 552 as *mut bool;
 
-pub const instruction_pointer: *mut i32 = 556 as *mut i32;
-pub const previous_ip: *mut i32 = 560 as *mut i32;
+pub const instruction_pointer: *mut u64 = 2176 as *mut u64;
+pub const previous_ip: *mut u64 = 2184 as *mut u64;
+pub const efer: *mut u64 = 2192 as *mut u64;
+
 pub const idtr_size: *mut i32 = 564 as *mut i32;
 pub const idtr_offset: *mut i32 = 568 as *mut i32;
 pub const gdtr_size: *mut i32 = 572 as *mut i32;
@@ -52,6 +55,8 @@ pub const segment_limits: *mut u32 = 768 as *mut u32;
 
 pub const protected_mode: *mut bool = 800 as *mut bool;
 pub const is_32: *mut bool = 804 as *mut bool;
+pub const is_64: *mut bool = 2200 as *mut bool;
+pub const rex_prefix: *mut u8 = 2201 as *mut u8;
 pub const stack_size_32: *mut bool = 808 as *mut bool;
 pub const memory_size: *mut u32 = 812 as *mut u32;
 pub const fpu_stack_empty: *mut u8 = 816 as *mut u8;
@@ -78,7 +83,12 @@ pub const fpu_st: *mut F80 = 1152 as *mut F80;
 
 pub fn get_reg32_offset(r: u32) -> u32 {
     dbg_assert!(r < 8);
-    (unsafe { reg32.offset(r as isize) }) as u32
+    (unsafe { reg64.offset(r as isize) }) as u32
+}
+
+pub fn get_reg64_offset(r: u32) -> u32 {
+    dbg_assert!(r < 16);
+    (unsafe { reg64.offset(r as isize) }) as u32
 }
 
 pub fn get_reg_mmx_offset(r: u32) -> u32 {

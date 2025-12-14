@@ -1,14 +1,14 @@
 #[allow(dead_code)]
 pub const DEBUG: bool = cfg!(debug_assertions);
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", target_arch = "wasm64"))]
 extern "C" {
     pub fn log_from_wasm(ptr: *const u8, len: usize);
     pub fn console_log_from_wasm(ptr: *const u8, len: usize);
     pub fn dbg_trace_from_wasm();
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", target_arch = "wasm64"))]
 pub fn log_to_js_console<T: std::string::ToString>(s: T) {
     let s = s.to_string();
     let len = s.len();
@@ -17,7 +17,7 @@ pub fn log_to_js_console<T: std::string::ToString>(s: T) {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", target_arch = "wasm64"))]
 pub fn console_log_to_js_console<T: std::string::ToString>(s: T) {
     let s = s.to_string();
     let len = s.len();
@@ -26,7 +26,7 @@ pub fn console_log_to_js_console<T: std::string::ToString>(s: T) {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", target_arch = "wasm64"))]
 pub fn dbg_trace() {
     if DEBUG {
         unsafe {
@@ -35,7 +35,7 @@ pub fn dbg_trace() {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))]
 pub fn dbg_trace() {}
 
 #[allow(unused_macros)]
@@ -65,7 +65,7 @@ macro_rules! dbg_assert {
     };
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", target_arch = "wasm64"))]
 #[allow(unused_macros)]
 macro_rules! console_log {
     ($fmt:expr) => {
@@ -80,7 +80,7 @@ macro_rules! console_log {
     };
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", target_arch = "wasm64"))]
 #[allow(unused_macros)]
 macro_rules! dbg_log {
     ($fmt:expr) => {
