@@ -29,13 +29,13 @@ use std::ptr;
 pub static mut mem8: *mut u8 = ptr::null_mut();
 
 #[no_mangle]
-pub fn allocate_memory(size: u32) -> u32 {
+pub fn allocate_memory(size: u32) -> usize {
     unsafe {
         dbg_assert!(mem8.is_null());
     };
     dbg_log!("Allocate memory size={}m", size >> 20);
     let layout = alloc::Layout::from_size_align(size as usize, 0x1000).unwrap();
-    let ptr = unsafe { alloc::alloc(layout) as u32 };
+    let ptr = unsafe { alloc::alloc(layout) as usize };
     unsafe {
         mem8 = ptr as *mut u8;
     };
@@ -53,7 +53,7 @@ pub static mut vga_mem8: *mut u8 = ptr::null_mut();
 pub static mut vga_memory_size: u32 = 0;
 
 #[no_mangle]
-pub fn svga_allocate_memory(size: u32) -> u32 {
+pub fn svga_allocate_memory(size: u32) -> usize {
     unsafe {
         dbg_assert!(vga_mem8.is_null());
     };
@@ -68,7 +68,7 @@ pub fn svga_allocate_memory(size: u32) -> u32 {
         vga_memory_size = size;
         vga::set_dirty_bitmap_size(size >> 12 >> 6);
     };
-    ptr as u32
+    ptr as usize
 }
 
 #[no_mangle]

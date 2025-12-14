@@ -67,16 +67,27 @@ CLOSURE_FLAGS=\
 		--language_in ECMASCRIPT_2020\
 		--language_out ECMASCRIPT_2020
 
+CARGO_FLAGS_RUSTC=\
+		-C linker=tools/rust-lld-wrapper \
+		-C link-args="--import-table --global-base=4096 $(STRIP_DEBUG_FLAG)" \
+		--verbose
+
 CARGO_FLAGS_SAFE=\
 		--target wasm32-unknown-unknown \
 		-- \
-		-C linker=tools/rust-lld-wrapper \
-		-C link-args="--import-table --global-base=4096 $(STRIP_DEBUG_FLAG)" \
+		$(CARGO_FLAGS_RUSTC) \
 		-C link-args="build/softfloat.o" \
-		-C link-args="build/zstddeclib.o" \
-		--verbose
+		-C link-args="build/zstddeclib.o"
+
+CARGO_FLAGS_SAFE_WASM64=\
+		--target wasm64-unknown-unknown \
+		-- \
+		$(CARGO_FLAGS_RUSTC) \
+		-C link-args="build/softfloat64.o" \
+		-C link-args="build/zstddeclib64.o"
 
 CARGO_FLAGS=$(CARGO_FLAGS_SAFE) -C target-feature=+bulk-memory -C target-feature=+multivalue -C target-feature=+simd128
+CARGO_FLAGS_WASM64=$(CARGO_FLAGS_SAFE_WASM64) -C target-feature=+bulk-memory -C target-feature=+multivalue -C target-feature=+simd128
 
 CORE_FILES=cjs.js const.js io.js main.js lib.js buffer.js ide.js pci.js floppy.js \
 	   dma.js pit.js vga.js ps2.js rtc.js uart.js \
@@ -226,6 +237,12 @@ build/v86-fallback.wasm: $(RUST_FILES) build/softfloat.o build/zstddeclib.o Carg
 	cargo rustc --release $(CARGO_FLAGS_SAFE)
 	cp build/wasm32-unknown-unknown/release/v86.wasm build/v86-fallback.wasm || true
 
+build/v86-wasm64.wasm: $(RUST_FILES) build/softfloat64.o build/zstddeclib64.o Cargo.toml
+	mkdir -p build/
+	cargo +nightly rustc --release -Z build-std=std,panic_abort $(CARGO_FLAGS_WASM64)
+	cp build/wasm64-unknown-unknown/release/v86.wasm build/v86-wasm64.wasm
+	-$(WASM_OPT) && wasm-opt -O2 --strip-debug build/v86-wasm64.wasm -o build/v86-wasm64.wasm
+
 debug-with-profiler: $(RUST_FILES) build/softfloat.o build/zstddeclib.o Cargo.toml
 	mkdir -p build/
 	cargo rustc --features profiler $(CARGO_FLAGS)
@@ -253,6 +270,22 @@ build/zstddeclib.o: lib/zstd/zstddeclib.c
 	    --target=wasm32 -O3 -flto -nostdlib -fvisibility=hidden -ffunction-sections -fdata-sections \
 	    -DZSTDLIB_VISIBILITY="" \
 	    -o build/zstddeclib.o \
+	    lib/zstd/zstddeclib.c
+
+build/softfloat64.o: lib/softfloat/softfloat.c
+	mkdir -p build
+	clang -c -Wall \
+	    --target=wasm64 -O3 -flto -nostdlib -fvisibility=hidden -ffunction-sections -fdata-sections \
+	    -DSOFTFLOAT_FAST_INT64 -DINLINE_LEVEL=5 -DSOFTFLOAT_FAST_DIV32TO16 -DSOFTFLOAT_FAST_DIV64TO32 \
+	    -o build/softfloat64.o \
+	    lib/softfloat/softfloat.c
+
+build/zstddeclib64.o: lib/zstd/zstddeclib.c
+	mkdir -p build
+	clang -c -Wall \
+	    --target=wasm64 -O3 -flto -nostdlib -fvisibility=hidden -ffunction-sections -fdata-sections \
+	    -DZSTDLIB_VISIBILITY="" \
+	    -o build/zstddeclib64.o \
 	    lib/zstd/zstddeclib.c
 
 clean:

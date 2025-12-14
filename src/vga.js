@@ -363,7 +363,10 @@ export function VGAScreen(cpu, bus, screen, vga_memory_size)
     io.register_read(0x1CF, this, undefined, this.port1CF_read);
 
 
-    const vga_offset = cpu.svga_allocate_memory(this.vga_memory_size) >>> 0;
+    let vga_offset = cpu.svga_allocate_memory(this.vga_memory_size);
+    if (typeof vga_offset === "number") {
+        vga_offset >>>= 0;
+    }
     this.svga_memory = view(Uint8Array, cpu.wasm_memory, vga_offset, this.vga_memory_size);
 
     this.diff_addr_min = this.vga_memory_size;
@@ -1172,7 +1175,10 @@ VGAScreen.prototype.set_size_graphical = function(width, height, virtual_width, 
         if(typeof ImageData !== "undefined")
         {
             const size = virtual_width * virtual_height;
-            const offset = this.cpu.svga_allocate_dest_buffer(size) >>> 0;
+            let offset = this.cpu.svga_allocate_dest_buffer(size);
+            if (typeof offset === "number") {
+                offset >>>= 0;
+            }
 
             this.dest_buffet_offset = offset;
             this.image_data = new ImageData(new Uint8ClampedArray(this.cpu.wasm_memory.buffer, offset, 4 * size), virtual_width, virtual_height);
